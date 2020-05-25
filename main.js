@@ -9,12 +9,12 @@ const { autoUpdater } = require('electron-updater')
 
 let mainWindow
 
-global.flixerrDevelop = false
+if(process.argv.indexOf('-dev') > -1) global.flixerrDevelop = true
 
 function createWindow() {
     let mainWindowState = windowStateKeeper({
-        defaultWidth: 1165,
-        defaultHeight: 680,
+        defaultWidth: 1200,
+        defaultHeight: 700,
     })
 
     mainWindow = new BrowserWindow({
@@ -22,9 +22,9 @@ function createWindow() {
         y: mainWindowState.y,
         width: mainWindowState.width,
         height: mainWindowState.height,
-        minWidth: 1128,
-        minHeight: 680,
-        maximizable: false,
+        minWidth: 1200,
+        minHeight: 700,
+        maximizable: process.platform == 'win32',
         title: 'Flixerr',
         icon: __dirname + '/assets/imgs/icon.ico',
         backgroundColor: '#5d16fd',

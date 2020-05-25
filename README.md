@@ -7,14 +7,16 @@ The best free movie & tv series torrent streaming app.
 
 ### Now with dark mode and PiP view!
 
-### Join us on <a href="https://discord.gg/vQPuPjS"> Discord </a>
+### Join us on <a href="https://discord.gg/vQPuPjS"> Discord. </a>
 
 <p align="center">
-<img src="https://flixerrtv.com/static/flixerr-mac-mockup-min-b2683a8c4b63095aed6bcac5c6dafa6c.png">
+<img src="https://github.com/carlelieser/Flixerr/blob/master/assets/imgs/new-mac-mockup.png?raw=true=">
 </p>
 
 ### Installation
 To install Flixerr, click the appropriate link for your system in the releases page. Alternatively, you can click the download button on our website.
+
+As of update 1.6.0, it is recommended to run `npm run rebuild` after running `npm install` for the first time. If you're on Windows, it is also necessary to install Apple's [Bonjour Services](https://download.developer.apple.com/Developer_Tools/bonjour_sdk_for_windows_v3.0/bonjoursdksetup.exe) before installing the project's dependencies. The `mdns` package used for casting fails on Windows if Bonjour is not installed.
 
 ### Features
 Flixerr makes it easy to stream movies straight from your desktop. Just find the movie you want to watch, and click play.
@@ -41,4 +43,4 @@ The process is as follows:
 4. Torrent is saved in case the user tries to watch the same movie more than once.
 
 ### Contributing
- If you want to contribute to making Flixerr better/faster, please don't hesitate! If you have any questions please email support@flixerrtv.com, issues are only for bugs/feature requests. 
+ If you want to contribute to making Flixerr better/faster, please don't hesitate!If you have any questions please email support@flixerrtv.com, issues are only for bugs/feature requests. 

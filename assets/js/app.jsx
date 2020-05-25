@@ -18,7 +18,7 @@ import Trailer from './trailer'
 import DarkModeToggle from './dark-mode-toggle'
 
 import TorrentSearch from './torrent-search'
-import SubtitleSearch from './subtitle-search'
+import SubtitleSearch from './subtitles/subtitle-search'
 import { default as request } from 'axios'
 import VideoStream from './video-stream'
 
@@ -32,6 +32,8 @@ class App extends Component {
         this.fileLoadedTimeout = false
         this.qualityTimeout = false
         this.introTimeout = false
+        this.saveLastLeftOffTimeout = false
+        this.autoSaveInterval = false
 
         this.state = {
             apiKey: '22b4015cb2245d35a9c1ad8cd48e314c',
@@ -39,7 +41,6 @@ class App extends Component {
             readyToStream: false,
             willClose: false,
             trailer: false,
-            readyToClose: false,
             loginError: false,
             showIntro: false,
             currentVideoStream: false,
@@ -111,14 +112,6 @@ class App extends Component {
 
     setFileLoaded = (fileLoaded) => {
         this.setState({ fileLoaded })
-    }
-
-    setReady = (readyToClose) => {
-        this.setState({ readyToClose })
-    }
-
-    setWillClose = (willClose) => {
-        this.setState({ willClose })
     }
 
     toggleIntro = (showIntro) => {
@@ -300,9 +293,8 @@ class App extends Component {
                 console.log(data)
             }
 
-            this.databaseRef.update(data, (err) => {
-                console.log('Data set!')
-                this.setCloseReady()
+            this.databaseRef.update(data, () => {
+                console.log('Database updated.')
             })
         }
     }
@@ -444,19 +436,6 @@ class App extends Component {
         }
     }
 
-    setCloseReady = (message, load) => {
-        if (this.state.willClose) {
-            setTimeout(() => {
-                this.setPlayerStatus(
-                    message ? message : 'Data saved succesfully!',
-                    load ? load : false
-                ).then(() => {
-                    this.setReady(true)
-                })
-            }, 600)
-        }
-    }
-
     setStorage = (key) => {
         console.log('Setting storage', key)
         storage.set(
@@ -469,15 +448,11 @@ class App extends Component {
                 darkMode: this.state.darkMode,
             },
             (error) => {
-                if (error) {
-                    throw error
-                }
+                if (error) throw error
 
                 if (firebase.auth().currentUser) {
                     this.setEverything = false
                     this.setBucket(key)
-                } else {
-                    this.setCloseReady()
                 }
             }
         )
@@ -640,36 +615,51 @@ class App extends Component {
         this.setState({ time })
     }
 
+    saveLastLeftOff = (time) => {
+        clearTimeout(this.saveLastLeftOffTimeout)
+        this.saveLastLeftOffTimeout = setTimeout(() => {
+            this.updateMovieTime(time)
+        }, 400)
+    }
+
+    updateMovieTimeWithCurrentTime = () => {
+        let { currentTime } = this.state
+        this.updateMovieTime(currentTime)
+    }
+
+    startAutoSaveInterval = () => {
+        console.log('Setting auto-save interval.')
+        let ms = 1000 * 30
+        this.autoSaveInterval = accurateInterval(
+            this.updateMovieTimeWithCurrentTime,
+            ms
+        )
+    }
+
+    clearAutoSaveInterval = () => {
+        console.log('Clearing auto-save interval')
+        if (this.autoSaveInterval) this.autoSaveInterval.clear()
+        this.autoSaveInterval = false
+    }
+
     handleVideo = (e) => {
         let video = e.currentTarget
-        if (video.duration) {
-            let value = this.state.live
-                    ? 100
-                    : (100 / video.duration) * video.currentTime,
-                formatted = video.duration - video.currentTime
+        let { duration, currentTime, paused } = video
+        if (duration) {
+            let value = this.state.live ? 100 : (100 / duration) * currentTime,
+                formatted = duration - currentTime
             let time = this.state.live ? 'LIVE' : this.formatTime(formatted)
             let colorStop = this.state.seekValue / 100
 
             this.setColorStop(colorStop)
 
-            if (!this.state.isStreaming) {
-                this.startStreaming()
-            }
-
+            if (!this.state.isStreaming) this.startStreaming()
             this.setPlayerTime(time)
-            this.setCurrentTime(video.currentTime)
+            this.setCurrentTime(currentTime)
             this.setSeekValue(value)
+            this.saveLastLeftOff(currentTime)
         }
-        this.togglePause(video.paused)
-    }
-
-    handleVideoClose = (video) => {
-        if (video.src) {
-            this.setPlayerStatus('Saving data before closing', true)
-            this.updateMovieTime(video.currentTime, () => {
-                this.setCloseReady('Closing', true)
-            })
-        }
+        this.togglePause(paused)
     }
 
     setMovieTime = () => {
@@ -679,6 +669,7 @@ class App extends Component {
 
         if (movieMatch) {
             if (movieMatch.currentTime) {
+                console.log('User left off at:', movieMatch.currentTime)
                 this.setStartTime(movieMatch.currentTime)
             }
 
@@ -1384,7 +1375,7 @@ class App extends Component {
     fetchFromPopcorn = (id, movie) => {
         let isSeries = this.isSeries(movie),
             type = isSeries ? 'show' : 'movie',
-            url = `http://popcorn-api.io/${type}/${id}`
+            url = `https://movies-v2.api-fetch.sh/${type}/${id}`
 
         return this.fetchContent(url)
             .then((data) => {
@@ -1479,142 +1470,169 @@ class App extends Component {
         let isSeries = this.isSeries(movie),
             hasMagnet = this.hasMagnet(movie)
         this.resetVideo()
-        this.removeTorrents()
+
         this.closeServer()
+        this.removeTorrents().then(() => {
+            if (hasMagnet) {
+                this.streamTorrent(movie)
+            } else {
+                let currentMovie = this.getCurrentMovie()
+                if (currentMovie) {
+                    let query = this.getSearchQuery(movie, excludeDate)
+                    let title = this.getMovieTitle(movie)
 
-        if (hasMagnet) {
-            this.streamTorrent(movie)
-        } else {
-            let currentMovie = this.getCurrentMovie()
-            if (currentMovie) {
-                let query = this.getSearchQuery(movie, excludeDate)
-                let title = this.getMovieTitle(movie)
+                    this.setPlayerStatus(
+                        `Searching the entire universe for "${title}"`,
+                        true
+                    )
 
-                this.setPlayerStatus(
-                    `Searching the entire universe for "${title}"`,
-                    true
-                )
+                    this.getIMDBID(movie)
+                        .then((id) => {
+                            return this.getPopcornTorrent(id, movie)
+                        })
+                        .then((torrent) => {
+                            if (torrent) {
+                                this.changeCurrentMagnet(torrent.magnet)
+                                this.updateMovieTimeArray(movie, true)
+                                this.streamTorrent(torrent)
+                            } else {
+                                throw new Error(
+                                    "Couldn't find a torrent with Popcorn API."
+                                )
+                            }
+                        })
+                        .catch((err) => {
+                            console.log(err)
+                            if (err) {
+                                let movieData = this.getMovieTypeData(movie)
+                                let publicSearch = this.publicSearch
+                                    .search(
+                                        ['1337x', 'Rarbg'],
+                                        query,
+                                        movieData.urlParams.type,
+                                        20
+                                    )
+                                    .catch((err) => {
+                                        console.log(err)
+                                    })
 
-                this.getIMDBID(movie)
-                    .then((id) => {
-                        return this.getPopcornTorrent(id, movie)
-                    })
-                    .then((torrent) => {
-                        if (torrent) {
-                            this.changeCurrentMagnet(torrent.magnet)
-                            this.updateMovieTimeArray(movie, true)
-                            this.streamTorrent(torrent)
-                        } else {
-                            throw new Error(
-                                "Couldn't find a torrent with Popcorn API."
-                            )
-                        }
-                    })
-                    .catch((err) => {
-                        console.log(err)
-                        let movieData = this.getMovieTypeData(movie)
-                        let publicSearch = this.publicSearch
-                            .search(
-                                ['1337x', 'Rarbg'],
-                                query,
-                                movieData.urlParams.type,
-                                20
-                            )
-                            .catch((err) => {
-                                console.log(err)
-                            })
+                                let proprietarySearch = this.torrentSearch
+                                    .searchTorrents(query, isSeries)
+                                    .catch((err) => {
+                                        console.log(err)
+                                    })
 
-                        let proprietarySearch = this.torrentSearch
-                            .searchTorrents(query, isSeries)
-                            .catch((err) => {
-                                console.log(err)
-                            })
+                                Promise.all([publicSearch, proprietarySearch])
+                                    .then((data) => {
+                                        console.log(data)
+                                        data = this.mergeArrayofArrays(data)
 
-                        Promise.all([publicSearch, proprietarySearch])
-                            .then((data) => {
-                                console.log(data)
-                                data = this.mergeArrayofArrays(data)
-
-                                if (data[0]) {
-                                    if (
-                                        (data[0].message ||
-                                            typeof data[0] === 'string') &&
-                                        data.length <= 2
-                                    ) {
-                                        this.searchTorrent(movie, true)
-                                    } else {
-                                        let magnetPromises = []
-                                        for (let n = 0; n < data.length; n++) {
-                                            let magnetTorrent = data[n]
-                                            if (magnetTorrent) {
-                                                if (magnetTorrent.desc) {
-                                                    let promise = this.torrentSearch.getMagnetFromLink(
-                                                        magnetTorrent
-                                                    )
-                                                    magnetPromises.push(promise)
-                                                }
-                                            }
-                                        }
-
-                                        Promise.all(magnetPromises)
-                                            .then((results) => {
-                                                results = [...results, ...data]
-
-                                                let cleanResults = results.filter(
-                                                    (torrent) => {
-                                                        if (torrent) {
-                                                            return torrent.magnet
+                                        if (data[0]) {
+                                            if (
+                                                (data[0].message ||
+                                                    typeof data[0] ===
+                                                        'string') &&
+                                                data.length <= 2
+                                            ) {
+                                                this.searchTorrent(movie, true)
+                                            } else {
+                                                let magnetPromises = []
+                                                for (
+                                                    let n = 0;
+                                                    n < data.length;
+                                                    n++
+                                                ) {
+                                                    let magnetTorrent = data[n]
+                                                    if (magnetTorrent) {
+                                                        if (
+                                                            magnetTorrent.desc
+                                                        ) {
+                                                            let promise = this.torrentSearch.getMagnetFromLink(
+                                                                magnetTorrent
+                                                            )
+                                                            magnetPromises.push(
+                                                                promise
+                                                            )
                                                         }
                                                     }
-                                                )
+                                                }
 
-                                                if (cleanResults.length) {
-                                                    this.getPreferredTorrents(
-                                                        cleanResults
-                                                    ).then((torrents) => {
-                                                        let torrent = this.getQualityTorrent(
-                                                            torrents
+                                                Promise.all(magnetPromises)
+                                                    .then((results) => {
+                                                        results = [
+                                                            ...results,
+                                                            ...data,
+                                                        ]
+
+                                                        let cleanResults = results.filter(
+                                                            (torrent) => {
+                                                                if (torrent) {
+                                                                    return torrent.magnet
+                                                                }
+                                                            }
                                                         )
-                                                        if (torrent) {
-                                                            if (currentMovie) {
-                                                                let movie = this.getObjectClone(
-                                                                    currentMovie
-                                                                )
-                                                                movie.preferredTorrents = torrents
-                                                                this.setCurrentMovie(
-                                                                    movie,
-                                                                    () => {
-                                                                        this.changeCurrentMagnet(
-                                                                            torrent.magnet
-                                                                        )
-                                                                        this.updateMovieTimeArray(
-                                                                            movie,
-                                                                            true
-                                                                        )
-                                                                        this.streamTorrent(
-                                                                            torrent
+
+                                                        if (
+                                                            cleanResults.length
+                                                        ) {
+                                                            this.getPreferredTorrents(
+                                                                cleanResults
+                                                            ).then(
+                                                                (torrents) => {
+                                                                    let torrent = this.getQualityTorrent(
+                                                                        torrents
+                                                                    )
+                                                                    if (
+                                                                        torrent
+                                                                    ) {
+                                                                        if (
+                                                                            currentMovie
+                                                                        ) {
+                                                                            let movie = this.getObjectClone(
+                                                                                currentMovie
+                                                                            )
+                                                                            movie.preferredTorrents = torrents
+                                                                            this.setCurrentMovie(
+                                                                                movie,
+                                                                                () => {
+                                                                                    this.changeCurrentMagnet(
+                                                                                        torrent.magnet
+                                                                                    )
+                                                                                    this.updateMovieTimeArray(
+                                                                                        movie,
+                                                                                        true
+                                                                                    )
+                                                                                    this.streamTorrent(
+                                                                                        torrent
+                                                                                    )
+                                                                                }
+                                                                            )
+                                                                        }
+                                                                    } else {
+                                                                        this.applyTimeout(
+                                                                            1
                                                                         )
                                                                     }
-                                                                )
-                                                            }
+                                                                }
+                                                            )
                                                         } else {
-                                                            this.applyTimeout(1)
+                                                            this.applyTimeout()
                                                         }
                                                     })
-                                                } else {
-                                                    this.applyTimeout()
-                                                }
-                                            })
-                                            .catch((err) => console.log(err))
-                                    }
-                                } else {
-                                    this.applyTimeout(1)
-                                }
-                            })
-                            .catch((err) => console.log(err))
-                    })
+                                                    .catch((err) =>
+                                                        console.log(err)
+                                                    )
+                                            }
+                                        } else {
+                                            this.applyTimeout(1)
+                                        }
+                                    })
+                                    .catch((err) => console.log(err))
+                            }
+                        })
+                }
             }
-        }
+        })
     }
 
     isSeries = (movie) => {
@@ -1774,37 +1792,37 @@ class App extends Component {
         })
     }
 
-    updateMovieTime = (time, fallback) => {
+    updateMovieTime = (time, callback) => {
         let movie = this.getCurrentMovie()
         if (movie) {
             if (time) {
+                console.log('Updating movie time to:', time)
                 let clone = this.getObjectClone(movie)
                 clone.currentTime = time
                 this.setCurrentMovie(clone)
                 this.updateMovieTimeArray(clone)
             } else {
-                if (fallback) {
-                    fallback()
-                }
+                if (callback) callback()
             }
         }
     }
 
     removeClient = (time) => {
-        if (time) {
-            this.updateMovieTime(time)
-        }
+        if (time) this.updateMovieTime(time)
+        this.clearAutoSaveInterval()
         this.setState(
             {
                 error: false,
                 playerStatus: false,
             },
             () => {
-                this.destroyClient().then(() => {
-                    this.removeTorrents().then((result) => {
+                this.destroyClient()
+                    .then(() => {
+                        return this.removeTorrents()
+                    })
+                    .then((result) => {
                         console.log(result)
                     })
-                })
             }
         )
         this.setFullScreen()
@@ -2208,7 +2226,6 @@ class App extends Component {
             isSeries ? '' : `&primary_release_date.lte=${this.getDateforURL(1)}`
         }`
 
-        console.log(url)
         return url
     }
 
@@ -2718,7 +2735,6 @@ class App extends Component {
             playerLoading,
             playerStatus,
             videoQuality,
-            readyToClose,
             recentlyPlayed,
             searchContent,
             seekValue,
@@ -2771,13 +2787,12 @@ class App extends Component {
         let playerModal = this.showElementBasedOnValue(
             currentMovie,
             <Player
+                startAutoSaveInterval={this.startAutoSaveInterval}
                 subtitleOptions={subtitleOptions}
                 fileLoaded={fileLoaded}
                 currentVideoStream={this.state.currentVideoStream}
                 readyToStream={this.state.readyToStream}
                 setFileLoaded={this.setFileLoaded}
-                setWillClose={this.setWillClose}
-                readyToClose={readyToClose}
                 showIntro={showIntro}
                 toggleIntro={this.toggleIntro}
                 downloadPercent={downloadPercent}
@@ -2785,7 +2800,6 @@ class App extends Component {
                 startTime={startTime}
                 isStreaming={isStreaming}
                 changeCurrentMagnet={this.changeCurrentMagnet}
-                updateMovieTime={this.updateMovieTime}
                 resetClient={this.destroyClient}
                 togglePause={this.togglePause}
                 showBackup={this.showBackup}
@@ -2802,7 +2816,6 @@ class App extends Component {
                 videoIndex={videoIndex}
                 paused={paused}
                 removeClient={this.removeClient}
-                handleVideoClose={this.handleVideoClose}
                 setFullScreen={this.setFullScreen}
                 movie={currentMovie}
                 getCurrentMagnet={this.getCurrentMagnet}
@@ -2814,6 +2827,7 @@ class App extends Component {
                 handleVideo={this.handleVideo}
                 setSeekValue={this.setSeekValue}
                 seekValue={seekValue}
+                updateMovieTime={this.updateMovieTime}
             />
         )
 
